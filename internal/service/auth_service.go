@@ -5,22 +5,23 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"strings"
 
 	"github.com/ehsanshojaei/go-otp-auth/internal/config"
 	"github.com/ehsanshojaei/go-otp-auth/internal/model"
 	"github.com/ehsanshojaei/go-otp-auth/internal/repository"
+	apperrors "github.com/ehsanshojaei/go-otp-auth/pkg/errors"
 	"github.com/ehsanshojaei/go-otp-auth/pkg/jwt"
 	"github.com/ehsanshojaei/go-otp-auth/pkg/utils"
 	"gorm.io/gorm"
 )
 
+// Re-export errors for backward compatibility
 var (
-	ErrInvalidOTP        = errors.New("invalid OTP")
-	ErrOTPExpired       = errors.New("OTP has expired")
-	ErrTooManyAttempts  = errors.New("too many OTP attempts")
-	ErrRateLimitExceeded = errors.New("rate limit exceeded")
-	ErrInvalidPhoneNumber = errors.New("invalid phone number format")
+	ErrInvalidOTP         = apperrors.ErrInvalidOTP
+	ErrOTPExpired        = apperrors.ErrOTPExpired
+	ErrTooManyAttempts   = apperrors.ErrTooManyAttempts
+	ErrRateLimitExceeded = apperrors.ErrRateLimitExceeded
+	ErrInvalidPhoneNumber = apperrors.ErrInvalidPhoneNumber
 )
 
 type AuthService interface {
@@ -45,17 +46,9 @@ func NewAuthService(userRepo repository.UserRepository, otpRepo repository.OTPRe
 }
 
 func (s *authService) SendOTP(phoneNumber string) error {
-	// Sanitize and normalize input
-	phoneNumber = utils.NormalizePhoneNumber(phoneNumber)
-	phoneNumber = strings.TrimSpace(phoneNumber)
-	
-	// Validate input length to prevent DoS
-	if len(phoneNumber) > 20 || len(phoneNumber) < 8 {
-		return ErrInvalidPhoneNumber
-	}
-	
-	if !utils.ValidatePhoneNumber(phoneNumber) {
-		return ErrInvalidPhoneNumber
+	phoneNumber, err := utils.ValidateAndNormalizePhone(phoneNumber)
+	if err != nil {
+		return err
 	}
 
 	// Check rate limiting
@@ -63,49 +56,38 @@ func (s *authService) SendOTP(phoneNumber string) error {
 	if err != nil {
 		return fmt.Errorf("failed to check rate limit: %w", err)
 	}
-
 	if count >= s.config.OTP.MaxAttempts {
 		return ErrRateLimitExceeded
 	}
 
-	// Generate OTP
+	// Generate and store OTP
 	otpCode, err := utils.GenerateOTP(s.config.OTP.Length)
 	if err != nil {
 		return fmt.Errorf("failed to generate OTP: %w", err)
 	}
 
-	// Store OTP
 	if err := s.otpRepo.StoreOTP(phoneNumber, otpCode, s.config.OTP.ExpiryMinutes); err != nil {
 		return fmt.Errorf("failed to store OTP: %w", err)
 	}
 
-	// Increment rate limit
 	if err := s.otpRepo.IncrementRateLimit(phoneNumber, int(s.config.OTP.RateLimitWindow.Minutes())); err != nil {
 		return fmt.Errorf("failed to increment rate limit: %w", err)
 	}
 
-	// Print OTP to console (as per requirements)
-	log.Printf("OTP for %s: %s", phoneNumber, otpCode)
-
+	utils.LogOTP(phoneNumber, otpCode)
 	return nil
 }
 
 func (s *authService) VerifyOTP(phoneNumber, otpCode string) (*model.AuthResponse, error) {
-	// Sanitize and normalize input
-	phoneNumber = utils.NormalizePhoneNumber(phoneNumber)
-	phoneNumber = strings.TrimSpace(phoneNumber)
-	otpCode = strings.TrimSpace(otpCode)
-	
-	// Validate input lengths to prevent DoS
-	if len(phoneNumber) > 20 || len(phoneNumber) < 8 {
-		return nil, ErrInvalidPhoneNumber
-	}
-	if len(otpCode) != s.config.OTP.Length {
-		return nil, ErrInvalidOTP
+	var err error
+	phoneNumber, err = utils.ValidateAndNormalizePhone(phoneNumber)
+	if err != nil {
+		return nil, err
 	}
 	
-	if !utils.ValidatePhoneNumber(phoneNumber) {
-		return nil, ErrInvalidPhoneNumber
+	otpCode, err = utils.ValidateOTPCode(otpCode, s.config.OTP.Length)
+	if err != nil {
+		return nil, err
 	}
 
 	// Get stored OTP
@@ -133,22 +115,19 @@ func (s *authService) VerifyOTP(phoneNumber, otpCode string) (*model.AuthRespons
 		return nil, ErrInvalidOTP
 	}
 
-	// OTP is valid, delete it
+	// OTP is valid, delete it  
 	if err := s.otpRepo.DeleteOTP(phoneNumber); err != nil {
 		log.Printf("Failed to delete OTP: %v", err)
 	}
 
-	// Check if user exists
+	// Get or create user
 	user, err := s.userRepo.GetByPhoneNumber(phoneNumber)
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, fmt.Errorf("failed to get user: %w", err)
 	}
 
-	// Create user if doesn't exist
 	if user == nil {
-		user = &model.User{
-			PhoneNumber: phoneNumber,
-		}
+		user = &model.User{PhoneNumber: phoneNumber}
 		if err := s.userRepo.Create(user); err != nil {
 			return nil, fmt.Errorf("failed to create user: %w", err)
 		}

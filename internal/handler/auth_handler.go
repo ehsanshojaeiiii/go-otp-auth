@@ -5,6 +5,7 @@ import (
 
 	"github.com/ehsanshojaei/go-otp-auth/internal/model"
 	"github.com/ehsanshojaei/go-otp-auth/internal/service"
+	"github.com/ehsanshojaei/go-otp-auth/pkg/utils"
 	"github.com/gofiber/fiber/v2"
 )
 
@@ -33,35 +34,11 @@ func NewAuthHandler(authService service.AuthService) *AuthHandler {
 func (h *AuthHandler) SendOTP(c *fiber.Ctx) error {
 	var req model.SendOTPRequest
 	if err := c.BodyParser(&req); err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(model.ErrorResponse{
-			Error:   "invalid_request",
-			Message: err.Error(),
-		})
+		return utils.BadRequest(c, err.Error())
 	}
 
-	if err := h.authService.SendOTP(req.PhoneNumber); err != nil {
-		switch {
-		case errors.Is(err, service.ErrRateLimitExceeded):
-			return c.Status(fiber.StatusTooManyRequests).JSON(model.ErrorResponse{
-				Error:   "rate_limit_exceeded",
-				Message: "Too many OTP requests. Please try again later.",
-			})
-		case errors.Is(err, service.ErrInvalidPhoneNumber):
-			return c.Status(fiber.StatusBadRequest).JSON(model.ErrorResponse{
-				Error:   "invalid_phone_number",
-				Message: "Phone number must be in international format (e.g., +1234567890)",
-			})
-		default:
-			return c.Status(fiber.StatusInternalServerError).JSON(model.ErrorResponse{
-				Error:   "internal_error",
-				Message: "Failed to send OTP",
-			})
-		}
-	}
-
-	return c.JSON(model.SuccessResponse{
-		Message: "OTP sent successfully",
-	})
+	err := h.authService.SendOTP(req.PhoneNumber)
+	return h.handleAuthError(c, err, "OTP sent successfully")
 }
 
 // VerifyOTP godoc
@@ -79,42 +56,35 @@ func (h *AuthHandler) SendOTP(c *fiber.Ctx) error {
 func (h *AuthHandler) VerifyOTP(c *fiber.Ctx) error {
 	var req model.VerifyOTPRequest
 	if err := c.BodyParser(&req); err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(model.ErrorResponse{
-			Error:   "invalid_request",
-			Message: err.Error(),
-		})
+		return utils.BadRequest(c, err.Error())
 	}
 
 	authResponse, err := h.authService.VerifyOTP(req.PhoneNumber, req.OTPCode)
 	if err != nil {
-		switch {
-		case errors.Is(err, service.ErrInvalidOTP):
-			return c.Status(fiber.StatusUnauthorized).JSON(model.ErrorResponse{
-				Error:   "invalid_otp",
-				Message: "Invalid OTP code",
-			})
-		case errors.Is(err, service.ErrOTPExpired):
-			return c.Status(fiber.StatusUnauthorized).JSON(model.ErrorResponse{
-				Error:   "otp_expired",
-				Message: "OTP has expired. Please request a new one.",
-			})
-		case errors.Is(err, service.ErrTooManyAttempts):
-			return c.Status(fiber.StatusUnauthorized).JSON(model.ErrorResponse{
-				Error:   "too_many_attempts",
-				Message: "Too many failed attempts. Please request a new OTP.",
-			})
-		case errors.Is(err, service.ErrInvalidPhoneNumber):
-			return c.Status(fiber.StatusBadRequest).JSON(model.ErrorResponse{
-				Error:   "invalid_phone_number",
-				Message: "Phone number must be in international format (e.g., +1234567890)",
-			})
-		default:
-			return c.Status(fiber.StatusInternalServerError).JSON(model.ErrorResponse{
-				Error:   "internal_error",
-				Message: "Failed to verify OTP",
-			})
-		}
+		return h.handleAuthError(c, err, "")
 	}
 
 	return c.JSON(authResponse)
+}
+
+// Helper method for consistent auth error handling
+func (h *AuthHandler) handleAuthError(c *fiber.Ctx, err error, successMessage string) error {
+	if err == nil {
+		return utils.SuccessResponse(c, successMessage)
+	}
+
+	switch {
+	case errors.Is(err, service.ErrRateLimitExceeded):
+		return utils.TooManyRequests(c, "Too many OTP requests. Please try again later.")
+	case errors.Is(err, service.ErrInvalidPhoneNumber):
+		return utils.BadRequest(c, "Phone number must be in international format (e.g., +1234567890)")
+	case errors.Is(err, service.ErrInvalidOTP):
+		return utils.Unauthorized(c, "Invalid OTP code")
+	case errors.Is(err, service.ErrOTPExpired):
+		return utils.Unauthorized(c, "OTP has expired. Please request a new one.")
+	case errors.Is(err, service.ErrTooManyAttempts):
+		return utils.Unauthorized(c, "Too many failed attempts. Please request a new OTP.")
+	default:
+		return utils.InternalError(c, "Operation failed")
+	}
 }

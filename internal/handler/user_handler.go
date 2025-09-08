@@ -5,6 +5,7 @@ import (
 
 	"github.com/ehsanshojaei/go-otp-auth/internal/model"
 	"github.com/ehsanshojaei/go-otp-auth/internal/service"
+	"github.com/ehsanshojaei/go-otp-auth/pkg/utils"
 	"github.com/gofiber/fiber/v2"
 	"gorm.io/gorm"
 )
@@ -34,27 +35,17 @@ func NewUserHandler(userService service.UserService) *UserHandler {
 // @Failure 500 {object} model.ErrorResponse
 // @Router /users/{id} [get]
 func (h *UserHandler) GetUser(c *fiber.Ctx) error {
-	idStr := c.Params("id")
-	id, err := strconv.ParseUint(idStr, 10, 32)
+	id, err := strconv.ParseUint(c.Params("id"), 10, 32)
 	if err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(model.ErrorResponse{
-			Error:   "invalid_id",
-			Message: "Invalid user ID format",
-		})
+		return utils.BadRequest(c, "Invalid user ID format")
 	}
 
 	user, err := h.userService.GetUserByID(uint(id))
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
-			return c.Status(fiber.StatusNotFound).JSON(model.ErrorResponse{
-				Error:   "user_not_found",
-				Message: "User not found",
-			})
+			return utils.NotFound(c, "User not found")
 		}
-		return c.Status(fiber.StatusInternalServerError).JSON(model.ErrorResponse{
-			Error:   "internal_error",
-			Message: "Failed to retrieve user",
-		})
+		return utils.InternalError(c, "Failed to retrieve user")
 	}
 
 	return c.JSON(user)
@@ -78,25 +69,16 @@ func (h *UserHandler) GetUser(c *fiber.Ctx) error {
 func (h *UserHandler) GetUsers(c *fiber.Ctx) error {
 	var req model.GetUsersRequest
 	if err := c.QueryParser(&req); err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(model.ErrorResponse{
-			Error:   "invalid_request",
-			Message: err.Error(),
-		})
+		return utils.BadRequest(c, err.Error())
 	}
 
 	if err := req.Validate(); err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(model.ErrorResponse{
-			Error:   "validation_error",
-			Message: err.Error(),
-		})
+		return utils.BadRequest(c, err.Error())
 	}
 
 	users, err := h.userService.GetUsers(&req)
 	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(model.ErrorResponse{
-			Error:   "internal_error",
-			Message: "Failed to retrieve users",
-		})
+		return utils.InternalError(c, "Failed to retrieve users")
 	}
 
 	return c.JSON(users)
@@ -115,27 +97,27 @@ func (h *UserHandler) GetUsers(c *fiber.Ctx) error {
 // @Failure 500 {object} model.ErrorResponse
 // @Router /users/profile [get]
 func (h *UserHandler) GetProfile(c *fiber.Ctx) error {
-	userID := c.Locals("user_id")
-	if userID == nil {
-		return c.Status(fiber.StatusUnauthorized).JSON(model.ErrorResponse{
-			Error:   "unauthorized",
-			Message: "User ID not found in token",
-		})
+	userID, err := h.getUserID(c)
+	if err != nil {
+		return err
 	}
 
-	user, err := h.userService.GetUserByID(userID.(uint))
+	user, err := h.userService.GetUserByID(userID)
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
-			return c.Status(fiber.StatusNotFound).JSON(model.ErrorResponse{
-				Error:   "user_not_found",
-				Message: "User not found",
-			})
+			return utils.NotFound(c, "User not found")
 		}
-		return c.Status(fiber.StatusInternalServerError).JSON(model.ErrorResponse{
-			Error:   "internal_error",
-			Message: "Failed to retrieve profile",
-		})
+		return utils.InternalError(c, "Failed to retrieve profile")
 	}
 
 	return c.JSON(user)
+}
+
+// Helper method to extract user ID from JWT claims
+func (h *UserHandler) getUserID(c *fiber.Ctx) (uint, error) {
+	userID := c.Locals("user_id")
+	if userID == nil {
+		return 0, utils.Unauthorized(c, "User ID not found in token")
+	}
+	return userID.(uint), nil
 }

@@ -1,12 +1,12 @@
 package repository
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"time"
 
 	"github.com/ehsanshojaei/go-otp-auth/internal/model"
+	"github.com/ehsanshojaei/go-otp-auth/pkg/utils"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -28,7 +28,7 @@ func NewOTPRepository(client *redis.Client) OTPRepository {
 }
 
 func (r *otpRepository) StoreOTP(phoneNumber, code string, expiryMinutes int) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := utils.RedisContext()
 	defer cancel()
 
 	otp := model.OTP{
@@ -43,14 +43,14 @@ func (r *otpRepository) StoreOTP(phoneNumber, code string, expiryMinutes int) er
 		return fmt.Errorf("failed to marshal OTP: %w", err)
 	}
 
-	key := fmt.Sprintf("otp:%s", phoneNumber)
+	key := utils.OTPKey(phoneNumber)
 	return r.client.Set(ctx, key, data, time.Duration(expiryMinutes)*time.Minute).Err()
 }
 
 func (r *otpRepository) GetOTP(phoneNumber string) (*model.OTP, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := utils.RedisContext()
 	defer cancel()
-	key := fmt.Sprintf("otp:%s", phoneNumber)
+	key := utils.OTPKey(phoneNumber)
 
 	data, err := r.client.Get(ctx, key).Result()
 	if err != nil {
@@ -74,14 +74,14 @@ func (r *otpRepository) GetOTP(phoneNumber string) (*model.OTP, error) {
 }
 
 func (r *otpRepository) DeleteOTP(phoneNumber string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := utils.RedisContext()
 	defer cancel()
-	key := fmt.Sprintf("otp:%s", phoneNumber)
+	key := utils.OTPKey(phoneNumber)
 	return r.client.Del(ctx, key).Err()
 }
 
 func (r *otpRepository) IncrementAttempts(phoneNumber string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := utils.RedisContext()
 	defer cancel()
 
 	otp, err := r.GetOTP(phoneNumber)
@@ -96,15 +96,15 @@ func (r *otpRepository) IncrementAttempts(phoneNumber string) error {
 		return fmt.Errorf("failed to marshal OTP: %w", err)
 	}
 
-	key := fmt.Sprintf("otp:%s", phoneNumber)
+	key := utils.OTPKey(phoneNumber)
 	ttl := r.client.TTL(ctx, key).Val()
 	return r.client.Set(ctx, key, data, ttl).Err()
 }
 
 func (r *otpRepository) GetRateLimitCount(phoneNumber string) (int, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := utils.RedisContext()
 	defer cancel()
-	key := fmt.Sprintf("rate_limit:%s", phoneNumber)
+	key := utils.RateLimitKey(phoneNumber)
 
 	count, err := r.client.Get(ctx, key).Int()
 	if err != nil {
@@ -118,9 +118,9 @@ func (r *otpRepository) GetRateLimitCount(phoneNumber string) (int, error) {
 }
 
 func (r *otpRepository) IncrementRateLimit(phoneNumber string, windowMinutes int) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := utils.RedisContext()
 	defer cancel()
-	key := fmt.Sprintf("rate_limit:%s", phoneNumber)
+	key := utils.RateLimitKey(phoneNumber)
 
 	pipe := r.client.TxPipeline()
 	pipe.Incr(ctx, key)
