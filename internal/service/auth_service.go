@@ -1,9 +1,11 @@
 package service
 
 import (
+	"crypto/subtle"
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 
 	"github.com/ehsanshojaei/go-otp-auth/internal/config"
 	"github.com/ehsanshojaei/go-otp-auth/internal/model"
@@ -43,7 +45,14 @@ func NewAuthService(userRepo repository.UserRepository, otpRepo repository.OTPRe
 }
 
 func (s *authService) SendOTP(phoneNumber string) error {
+	// Sanitize and normalize input
 	phoneNumber = utils.NormalizePhoneNumber(phoneNumber)
+	phoneNumber = strings.TrimSpace(phoneNumber)
+	
+	// Validate input length to prevent DoS
+	if len(phoneNumber) > 20 || len(phoneNumber) < 8 {
+		return ErrInvalidPhoneNumber
+	}
 	
 	if !utils.ValidatePhoneNumber(phoneNumber) {
 		return ErrInvalidPhoneNumber
@@ -82,7 +91,18 @@ func (s *authService) SendOTP(phoneNumber string) error {
 }
 
 func (s *authService) VerifyOTP(phoneNumber, otpCode string) (*model.AuthResponse, error) {
+	// Sanitize and normalize input
 	phoneNumber = utils.NormalizePhoneNumber(phoneNumber)
+	phoneNumber = strings.TrimSpace(phoneNumber)
+	otpCode = strings.TrimSpace(otpCode)
+	
+	// Validate input lengths to prevent DoS
+	if len(phoneNumber) > 20 || len(phoneNumber) < 8 {
+		return nil, ErrInvalidPhoneNumber
+	}
+	if len(otpCode) != s.config.OTP.Length {
+		return nil, ErrInvalidOTP
+	}
 	
 	if !utils.ValidatePhoneNumber(phoneNumber) {
 		return nil, ErrInvalidPhoneNumber
@@ -104,8 +124,8 @@ func (s *authService) VerifyOTP(phoneNumber, otpCode string) (*model.AuthRespons
 		return nil, ErrTooManyAttempts
 	}
 
-	// Verify OTP
-	if storedOTP.Code != otpCode {
+	// Verify OTP using constant-time comparison to prevent timing attacks
+	if subtle.ConstantTimeCompare([]byte(storedOTP.Code), []byte(otpCode)) != 1 {
 		// Increment attempts
 		if err := s.otpRepo.IncrementAttempts(phoneNumber); err != nil {
 			log.Printf("Failed to increment OTP attempts: %v", err)

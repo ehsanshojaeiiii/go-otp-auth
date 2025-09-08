@@ -28,8 +28,9 @@ func NewOTPRepository(client *redis.Client) OTPRepository {
 }
 
 func (r *otpRepository) StoreOTP(phoneNumber, code string, expiryMinutes int) error {
-	ctx := context.Background()
-	
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
 	otp := model.OTP{
 		PhoneNumber: phoneNumber,
 		Code:        code,
@@ -47,9 +48,10 @@ func (r *otpRepository) StoreOTP(phoneNumber, code string, expiryMinutes int) er
 }
 
 func (r *otpRepository) GetOTP(phoneNumber string) (*model.OTP, error) {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
 	key := fmt.Sprintf("otp:%s", phoneNumber)
-	
+
 	data, err := r.client.Get(ctx, key).Result()
 	if err != nil {
 		if err == redis.Nil {
@@ -72,21 +74,23 @@ func (r *otpRepository) GetOTP(phoneNumber string) (*model.OTP, error) {
 }
 
 func (r *otpRepository) DeleteOTP(phoneNumber string) error {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
 	key := fmt.Sprintf("otp:%s", phoneNumber)
 	return r.client.Del(ctx, key).Err()
 }
 
 func (r *otpRepository) IncrementAttempts(phoneNumber string) error {
-	ctx := context.Background()
-	
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
 	otp, err := r.GetOTP(phoneNumber)
 	if err != nil || otp == nil {
 		return fmt.Errorf("OTP not found")
 	}
 
 	otp.Attempts++
-	
+
 	data, err := json.Marshal(otp)
 	if err != nil {
 		return fmt.Errorf("failed to marshal OTP: %w", err)
@@ -98,9 +102,10 @@ func (r *otpRepository) IncrementAttempts(phoneNumber string) error {
 }
 
 func (r *otpRepository) GetRateLimitCount(phoneNumber string) (int, error) {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
 	key := fmt.Sprintf("rate_limit:%s", phoneNumber)
-	
+
 	count, err := r.client.Get(ctx, key).Int()
 	if err != nil {
 		if err == redis.Nil {
@@ -113,13 +118,14 @@ func (r *otpRepository) GetRateLimitCount(phoneNumber string) (int, error) {
 }
 
 func (r *otpRepository) IncrementRateLimit(phoneNumber string, windowMinutes int) error {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 	key := fmt.Sprintf("rate_limit:%s", phoneNumber)
-	
+
 	pipe := r.client.TxPipeline()
 	pipe.Incr(ctx, key)
 	pipe.Expire(ctx, key, time.Duration(windowMinutes)*time.Minute)
-	
+
 	_, err := pipe.Exec(ctx)
 	return err
 }

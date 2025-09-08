@@ -1,7 +1,12 @@
 package main
 
 import (
+	"context"
 	"log"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/ehsanshojaei/go-otp-auth/internal/config"
 	"github.com/ehsanshojaei/go-otp-auth/internal/handler"
@@ -12,6 +17,8 @@ import (
 	"github.com/ehsanshojaei/go-otp-auth/pkg/jwt"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
+	"github.com/gofiber/fiber/v2/middleware/helmet"
+	"github.com/gofiber/fiber/v2/middleware/limiter"
 	"github.com/gofiber/fiber/v2/middleware/logger"
 	"github.com/gofiber/fiber/v2/middleware/recover"
 	"github.com/gofiber/swagger"
@@ -71,13 +78,27 @@ func main() {
 	authMiddleware := middleware.NewAuthMiddleware(jwtManager)
 
 	// Initialize Fiber app
-	app := setupApp(authHandler, userHandler, authMiddleware)
+	app := setupApp(authHandler, userHandler, authMiddleware, db, redisClient)
 
-	// Start server
-	log.Printf("Server starting on %s", cfg.ServerAddr())
-	if err := app.Listen(cfg.ServerAddr()); err != nil {
-		log.Fatalf("Failed to start server: %v", err)
+	// Start server with graceful shutdown
+	go func() {
+		log.Printf("Server starting on %s", cfg.ServerAddr())
+		if err := app.Listen(cfg.ServerAddr()); err != nil {
+			log.Fatalf("Failed to start server: %v", err)
+		}
+	}()
+
+	// Wait for shutdown signal
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+
+	log.Println("Shutting down server...")
+	if err := app.ShutdownWithTimeout(30 * time.Second); err != nil {
+		log.Fatalf("Server forced to shutdown: %v", err)
 	}
+
+	log.Println("Server gracefully stopped")
 }
 
 func initDB(cfg *config.Config) (*gorm.DB, error) {
@@ -97,16 +118,26 @@ func initDB(cfg *config.Config) (*gorm.DB, error) {
 
 func initRedis(cfg *config.Config) *redis.Client {
 	client := redis.NewClient(&redis.Options{
-		Addr:     cfg.RedisAddr(),
-		Password: cfg.Redis.Password,
-		DB:       cfg.Redis.DB,
+		Addr:         cfg.RedisAddr(),
+		Password:     cfg.Redis.Password,
+		DB:           cfg.Redis.DB,
+		DialTimeout:  10 * time.Second,
+		ReadTimeout:  5 * time.Second,
+		WriteTimeout: 5 * time.Second,
 	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := client.Ping(ctx).Err(); err != nil {
+		log.Fatalf("Failed to connect to Redis: %v", err)
+	}
 
 	log.Println("Redis connected successfully")
 	return client
 }
 
-func setupApp(authHandler *handler.AuthHandler, userHandler *handler.UserHandler, authMiddleware *middleware.AuthMiddleware) *fiber.App {
+func setupApp(authHandler *handler.AuthHandler, userHandler *handler.UserHandler, authMiddleware *middleware.AuthMiddleware, db *gorm.DB, redisClient *redis.Client) *fiber.App {
 	// Create Fiber app with custom configuration
 	app := fiber.New(fiber.Config{
 		ErrorHandler: func(c *fiber.Ctx, err error) error {
@@ -125,23 +156,63 @@ func setupApp(authHandler *handler.AuthHandler, userHandler *handler.UserHandler
 
 	// Global middleware
 	app.Use(recover.New())
+	app.Use(helmet.New())
+	app.Use(limiter.New(limiter.Config{
+		Max:        100, // 100 requests per minute per IP
+		Expiration: 1 * time.Minute,
+		KeyGenerator: func(c *fiber.Ctx) string {
+			return c.IP()
+		},
+		LimitReached: func(c *fiber.Ctx) error {
+			return c.Status(fiber.StatusTooManyRequests).JSON(fiber.Map{
+				"error":   "rate_limit_exceeded",
+				"message": "Too many requests from this IP",
+			})
+		},
+	}))
 	app.Use(logger.New(logger.Config{
-		Format: "[${time}] ${status} - ${method} ${path} - ${latency}\n",
+		Format: "[${time}] ${status} - ${method} ${path} - ${latency} - ${ip}\n",
 	}))
 	app.Use(cors.New(cors.Config{
-		AllowOrigins:     "*",
+		AllowOrigins:     "http://localhost:3000,http://127.0.0.1:3000",
 		AllowMethods:     "GET,POST,HEAD,PUT,DELETE,PATCH,OPTIONS",
 		AllowHeaders:     "Origin,Content-Type,Accept,Authorization",
-		AllowCredentials: false,
+		AllowCredentials: true,
 	}))
 
-	// Health check endpoint
+	// Health check endpoint with dependency checks
 	app.Get("/health", func(c *fiber.Ctx) error {
-		return c.JSON(fiber.Map{
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+
+		status := fiber.Map{
 			"status":  "healthy",
 			"service": "OTP Service",
 			"version": "1.0",
-		})
+			"checks": fiber.Map{
+				"database": "healthy",
+				"redis":    "healthy",
+			},
+		}
+
+		// Check database connection
+		if sqlDB, err := db.DB(); err != nil || sqlDB.PingContext(ctx) != nil {
+			status["status"] = "unhealthy"
+			status["checks"].(fiber.Map)["database"] = "unhealthy"
+		}
+
+		// Check Redis connection
+		if err := redisClient.Ping(ctx).Err(); err != nil {
+			status["status"] = "unhealthy"
+			status["checks"].(fiber.Map)["redis"] = "unhealthy"
+		}
+
+		statusCode := fiber.StatusOK
+		if status["status"] == "unhealthy" {
+			statusCode = fiber.StatusServiceUnavailable
+		}
+
+		return c.Status(statusCode).JSON(status)
 	})
 
 	// Swagger documentation
