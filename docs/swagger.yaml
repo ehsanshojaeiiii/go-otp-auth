@@ -260,7 +260,7 @@ paths:
       - users
 securityDefinitions:
   BearerAuth:
-    description: Type "Bearer" followed by a space and JWT token.
+    description: 'Enter JWT token in format: Bearer {token}'
     in: header
     name: Authorization
     type: apiKey

@@ -28,15 +28,10 @@ func (m *AuthMiddleware) RequireAuth() fiber.Handler {
 			})
 		}
 
-		bearerToken := strings.Fields(authHeader)
-		if len(bearerToken) != 2 || strings.ToLower(bearerToken[0]) != "bearer" {
-			return c.Status(fiber.StatusUnauthorized).JSON(model.ErrorResponse{
-				Error:   "unauthorized",
-				Message: "Invalid authorization header format",
-			})
-		}
+		// Extract token (remove "Bearer " if present)
+		tokenString := strings.TrimPrefix(authHeader, "Bearer ")
+		tokenString = strings.TrimSpace(tokenString)
 
-		tokenString := bearerToken[1]
 		claims, err := m.jwtManager.ValidateToken(tokenString)
 		if err != nil {
 			return c.Status(fiber.StatusUnauthorized).JSON(model.ErrorResponse{
