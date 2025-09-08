@@ -18,7 +18,7 @@ A secure and scalable backend service implementing OTP-based authentication and 
 ## Tech Stack
 
 - **Language**: Go 1.21
-- **Framework**: Gin
+- **Framework**: Fiber v2.52.9
 - **Database**: PostgreSQL 15
 - **Cache/Storage**: Redis 7
 - **Authentication**: JWT
