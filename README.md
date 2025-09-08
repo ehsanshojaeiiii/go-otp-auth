@@ -288,14 +288,29 @@ make test
 go test -v ./...
 ```
 
+## Security Features
+
+- **🛡️ Multi-Layer Rate Limiting**: 
+  - OTP requests: 3 per phone per 10 minutes
+  - Global API: 100 requests per IP per minute
+  - Verification attempts: 3 per OTP
+- **🔒 Timing Attack Prevention**: Constant-time OTP comparison
+- **🚫 Input Validation**: Enhanced phone number validation with DoS protection
+- **🛡️ Security Headers**: Helmet middleware for XSS/CSRF protection
+- **🔑 JWT Security**: HS256 signing with proper token validation
+- **📝 Input Sanitization**: All inputs sanitized and length-validated
+- **⏱️ Context Timeouts**: All database operations have timeout protection
+- **🔄 Graceful Shutdown**: Production-ready server lifecycle management
+
 ## Production Considerations
 
 1. **Environment Variables**: Set strong JWT secret and database passwords
 2. **HTTPS**: Use TLS/SSL in production
 3. **Database**: Use connection pooling and proper indexing
 4. **Monitoring**: Add logging and monitoring solutions
-5. **Rate Limiting**: Consider additional rate limiting at API gateway level
+5. **Rate Limiting**: Additional rate limiting at API gateway level recommended
 6. **SMS Integration**: Replace console logging with actual SMS service
+7. **Security**: All security features are production-ready
 
 ## Docker Commands
 

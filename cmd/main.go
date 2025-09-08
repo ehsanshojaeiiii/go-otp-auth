@@ -8,6 +8,7 @@ import (
 	"syscall"
 	"time"
 
+	_ "github.com/ehsanshojaei/go-otp-auth/docs"
 	"github.com/ehsanshojaei/go-otp-auth/internal/config"
 	"github.com/ehsanshojaei/go-otp-auth/internal/handler"
 	"github.com/ehsanshojaei/go-otp-auth/internal/middleware"
